@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The workflow only reads the repository and runs the suite. Declaring it
+# means the token cannot write regardless of the repository default, which
+# is a setting rather than a property of this file.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
