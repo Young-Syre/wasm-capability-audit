@@ -127,10 +127,7 @@ impl Report {
         }
         let mut total = 0u64;
         for m in &self.memories {
-            match m.max_pages {
-                Some(max) => total = total.saturating_add(max),
-                None => return None,
-            }
+            total = total.saturating_add(m.max_pages?);
         }
         Some(total)
     }
