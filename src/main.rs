@@ -22,8 +22,61 @@ mod exit {
     pub const USAGE: u8 = 2;
     /// The module could not be parsed.
     pub const PARSE: u8 = 3;
-    /// A file could not be read.
+    /// A file could not be read, or output could not be written.
     pub const IO: u8 = 4;
+}
+
+/// Stdout, with a closed pipe treated as the end of the job rather than a bug.
+///
+/// Rust ignores SIGPIPE at startup, so a `println!` whose reader has gone away
+/// fails, and the failure in a print macro is a panic: `--list-rules | head -5`
+/// exited 101, which is not one of the codes above. A Unix filter is supposed
+/// to stop quietly when its reader stops reading, and there is no
+/// dependency-free way to restore the default signal disposition, so every
+/// write goes through here instead.
+///
+/// A broken pipe exits 0 because the consumer got what it asked for. Any other
+/// write failure -- a full disk, a closed descriptor -- is a real error and
+/// exits IO with a message.
+mod out {
+    use std::fmt::Arguments;
+    use std::io::{ErrorKind, Write};
+
+    fn finish(result: std::io::Result<()>) {
+        match result {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::BrokenPipe => {
+                std::process::exit(super::exit::OK as i32)
+            }
+            Err(e) => {
+                eprintln!("{}: writing to stdout: {e}", super::TOOL);
+                std::process::exit(super::exit::IO as i32);
+            }
+        }
+    }
+
+    /// `println!`.
+    pub fn line(args: Arguments<'_>) {
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        finish(writeln!(lock, "{args}"));
+    }
+
+    /// `print!`.
+    pub fn text(args: Arguments<'_>) {
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        finish(write!(lock, "{args}"));
+    }
+}
+
+macro_rules! outln {
+    () => { crate::out::line(format_args!("")) };
+    ($($arg:tt)*) => { crate::out::line(format_args!($($arg)*)) };
+}
+
+macro_rules! out {
+    ($($arg:tt)*) => { crate::out::text(format_args!($($arg)*)) };
 }
 
 const HELP: &str = "\
@@ -109,28 +162,28 @@ struct Options {
 
 fn run(args: &[String]) -> Result<u8, Failure> {
     if args.is_empty() {
-        print!("{HELP}");
+        out!("{HELP}");
         return Ok(exit::USAGE);
     }
     for a in args {
         match a.as_str() {
             "-h" | "--help" => {
-                print!("{HELP}");
+                out!("{HELP}");
                 return Ok(exit::OK);
             }
             "-V" | "--version" => {
-                println!("{TOOL} {VERSION}");
+                outln!("{TOOL} {VERSION}");
                 return Ok(exit::OK);
             }
             "--list-capabilities" => {
                 for c in Capability::ALL {
-                    println!("{:<24} {}", c.id(), c.describes());
+                    outln!("{:<24} {}", c.id(), c.describes());
                 }
                 return Ok(exit::OK);
             }
             "--list-rules" => {
                 for r in RULE_IDS {
-                    println!("{r}");
+                    outln!("{r}");
                 }
                 return Ok(exit::OK);
             }
@@ -197,9 +250,9 @@ fn run(args: &[String]) -> Result<u8, Failure> {
         let new = load_report(&positional[1], parse_opts)?;
         let d = diff::diff(&old, &new);
         if opts.json {
-            println!("{}", diff::render_json(&d));
+            outln!("{}", diff::render_json(&d));
         } else {
-            print!("{}", diff::render_text(&d));
+            out!("{}", diff::render_text(&d));
         }
         return Ok(if d.capabilities_grew() {
             exit::VIOLATION
@@ -232,18 +285,18 @@ fn run(args: &[String]) -> Result<u8, Failure> {
     };
 
     if opts.json {
-        println!("{}", report::render_json(&report));
+        outln!("{}", report::render_json(&report));
     } else {
-        print!("{}", report::render_text(&report));
+        out!("{}", report::render_text(&report));
     }
 
     let mut failed = false;
     if !violations.is_empty() {
         if !opts.json {
-            println!();
-            println!("POLICY VIOLATIONS ({})", violations.len());
+            outln!();
+            outln!("POLICY VIOLATIONS ({})", violations.len());
             for v in &violations {
-                println!("  ! {v}");
+                outln!("  ! {v}");
             }
         } else {
             for v in &violations {

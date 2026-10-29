@@ -354,3 +354,61 @@ fn the_unknown_fixture_says_it_could_not_classify_the_imports() {
     assert!(text.contains("UNKNOWN-SUMMARY-001"));
     assert!(text.contains("3 unclassified import(s)"));
 }
+
+/// A reader that stops reading must not be a crash.
+///
+/// Rust ignores SIGPIPE at startup, so a `println!` whose reader has gone away
+/// fails, and a failed write inside a print macro is a panic. `--list-rules |
+/// head -5` exited 101, which is not one of the documented codes. A Unix filter
+/// stops quietly when its reader stops.
+mod closed_pipe {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    use super::{binary, fixture};
+
+    /// Spawn with a piped stdout, read one line, drop the pipe, and report the
+    /// exit status. Dropping the handle is what closes the reader's end.
+    fn exit_after_one_line(args: &[&str]) -> Option<i32> {
+        let mut child = Command::new(binary())
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+
+        {
+            let mut stdout = child.stdout.take().expect("piped stdout");
+            let mut one = [0u8; 1];
+            // One byte is enough to prove the child started writing.
+            let _ = stdout.read(&mut one);
+        } // stdout dropped here: the read end is now closed.
+
+        child.wait().expect("wait").code()
+    }
+
+    #[test]
+    fn listing_rules_into_a_closed_pipe_exits_cleanly() {
+        for args in [
+            vec!["--list-rules"],
+            vec!["--list-capabilities"],
+            vec!["--help"],
+        ] {
+            let code = exit_after_one_line(&args);
+            assert_ne!(code, Some(101), "{args:?} panicked on a closed pipe");
+            assert!(
+                matches!(code, Some(0)),
+                "{args:?} exited {code:?}, expected 0"
+            );
+        }
+    }
+
+    #[test]
+    fn an_audit_into_a_closed_pipe_exits_cleanly() {
+        let path = fixture("near-contract.wasm");
+        let arg = path.to_str().expect("utf-8 path");
+        let code = exit_after_one_line(&[arg]);
+        assert_ne!(code, Some(101), "the audit panicked on a closed pipe");
+        assert!(matches!(code, Some(0)), "exited {code:?}, expected 0");
+    }
+}

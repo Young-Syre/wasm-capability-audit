@@ -632,7 +632,7 @@ A third property closes the loop on the documentation itself:
   in the code but not in the registry, or in the registry but not in this
   README.
 
-Run it — 203 tests, no network, no fixtures to download:
+Run it — 205 tests, no network, no fixtures to download:
 
 ```sh
 cargo test
@@ -680,7 +680,14 @@ cargo test
 | `1` | A policy was violated, `--fail-on` was met, or `diff` found capabilities the old module did not have. |
 | `2` | Usage error, or a policy file that could not be parsed. |
 | `3` | The module could not be parsed. The message names the section and byte offset. |
-| `4` | A file could not be read. |
+| `4` | A file could not be read, or output could not be written. |
+
+A reader that stops reading is not an error: `--list-rules | head -5` exits
+`0`. Rust ignores `SIGPIPE` at startup, so a failed write inside a print macro
+is a panic, and that path used to exit `101` — a code this table does not
+contain. Every write to stdout goes through a handle whose error is handled,
+because there is no dependency-free way to restore the default signal
+disposition.
 
 A parse failure looks like this, and is a clean exit rather than a panic:
 
@@ -727,7 +734,7 @@ output.
 | `src/fixtures.rs` | The readable fixture byte-builder |
 | `src/main.rs` | The command-line interface and its exit codes |
 | `policies/` | Two worked policy files |
-| `tests/` | 203 tests; `malformed.rs` is the robustness battery |
+| `tests/` | 205 tests; `malformed.rs` is the robustness battery |
 
 ## Licence
 
