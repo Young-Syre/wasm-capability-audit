@@ -1,0 +1,217 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  stable:
+    name: stable — build, test, fmt, clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: No dependencies
+        # The crate must stay dependency-free. Cargo.lock holds exactly one
+        # package: this one.
+        run: |
+          count=$(grep -c '^\[\[package\]\]' Cargo.lock)
+          echo "packages in Cargo.lock: $count"
+          test "$count" -eq 1
+
+      - name: No unsafe code
+        run: grep -q 'forbid(unsafe_code)' src/lib.rs
+
+      - name: Fixtures are reproducible from the committed builder
+        run: |
+          cargo run --locked --example make_fixtures
+          git diff --exit-code -- tests/fixtures
+
+      - name: 'CLI: the WASI fixture reports the expected capability set'
+        run: |
+          out=$(./target/release/wasm-capability-audit tests/fixtures/wasi-exfil.wasm)
+          echo "$out"
+          for cap in filesystem network process clock randomness environment; do
+            echo "$out" | grep -q "^  $cap " || { echo "missing capability: $cap"; exit 1; }
+          done
+          echo "$out" | grep -q 'CAPABILITY SET (6)'
+          echo "$out" | grep -q 'COMBO-FS-NET-001'
+          echo "$out" | grep -q 'EXPORT-MEMORY-001'
+          echo "$out" | grep -q 'MEM-UNBOUNDED-001'
+          echo "$out" | grep -q 'START-FUNCTION-001'
+          echo "$out" | grep -q 'highest severity: critical'
+
+      - name: 'CLI: the clean fixture reports no capabilities'
+        run: |
+          out=$(./target/release/wasm-capability-audit tests/fixtures/clean-compute.wasm)
+          echo "$out"
+          echo "$out" | grep -q 'CAPABILITY SET (0)'
+          echo "$out" | grep -q 'the module asks the host for nothing'
+          echo "$out" | grep -q 'NO-IMPORTS-001'
+
+      - name: 'CLI: unclassifiable imports are reported as unknown'
+        run: |
+          out=$(./target/release/wasm-capability-audit tests/fixtures/unknown-host.wasm)
+          echo "$out"
+          echo "$out" | grep -q 'UNKNOWN-IMPORT-001'
+          echo "$out" | grep -q '3 unclassified import(s)'
+
+      - name: 'CLI: diff reports an added capability and exits 1'
+        run: |
+          set +e
+          out=$(./target/release/wasm-capability-audit diff \
+            tests/fixtures/wasi-clock-only.wasm \
+            tests/fixtures/wasi-clock-and-socket.wasm)
+          status=$?
+          set -e
+          echo "$out"
+          echo "exit status: $status"
+          test "$status" -eq 1
+          echo "$out" | grep -q 'CAPABILITIES ADDED (1)'
+          echo "$out" | grep -q '+ network'
+          echo "$out" | grep -q '+ wasi_snapshot_preview1.sock_send'
+
+      - name: 'CLI: diff of an unchanged module exits 0'
+        run: |
+          ./target/release/wasm-capability-audit diff \
+            tests/fixtures/wasi-exfil.wasm tests/fixtures/wasi-exfil.wasm \
+            | grep -q 'CAPABILITIES ADDED (0)'
+
+      - name: 'CLI: a policy violation exits 1'
+        run: |
+          set +e
+          out=$(./target/release/wasm-capability-audit \
+            --policy policies/sandboxed-plugin.policy \
+            tests/fixtures/wasi-exfil.wasm)
+          status=$?
+          set -e
+          echo "$out"
+          echo "exit status: $status"
+          test "$status" -eq 1
+          echo "$out" | grep -q 'POLICY VIOLATIONS'
+          echo "$out" | grep -q 'capability network is not allowed'
+
+      - name: 'CLI: a satisfied policy exits 0'
+        run: |
+          ./target/release/wasm-capability-audit \
+            --policy policies/sandboxed-plugin.policy \
+            tests/fixtures/wasi-clock-only.wasm > /dev/null
+
+      - name: 'CLI: an unparsable policy exits 2'
+        run: |
+          echo 'allow not-a-capability' > /tmp/broken.policy
+          set +e
+          ./target/release/wasm-capability-audit --policy /tmp/broken.policy \
+            tests/fixtures/clean-compute.wasm > /dev/null 2>/tmp/err
+          status=$?
+          set -e
+          cat /tmp/err
+          test "$status" -eq 2
+          grep -q 'unknown capability' /tmp/err
+
+      - name: 'CLI: a truncated module exits 3 without panicking'
+        run: |
+          head -c 100 tests/fixtures/wasi-exfil.wasm > /tmp/truncated.wasm
+          set +e
+          ./target/release/wasm-capability-audit /tmp/truncated.wasm > /dev/null 2>/tmp/err
+          status=$?
+          set -e
+          cat /tmp/err
+          echo "exit status: $status"
+          test "$status" -eq 3
+          grep -q 'at byte 0x' /tmp/err
+          ! grep -qi 'panic' /tmp/err
+
+      - name: 'CLI: an empty file exits 3'
+        run: |
+          : > /tmp/empty.wasm
+          set +e
+          ./target/release/wasm-capability-audit /tmp/empty.wasm > /dev/null 2>/tmp/err
+          status=$?
+          set -e
+          cat /tmp/err
+          test "$status" -eq 3
+          grep -q 'empty' /tmp/err
+
+      - name: 'CLI: a missing file exits 4'
+        run: |
+          set +e
+          ./target/release/wasm-capability-audit no-such-module.wasm >/dev/null 2>&1
+          status=$?
+          set -e
+          test "$status" -eq 4
+
+      - name: 'CLI: an unknown option exits 2'
+        run: |
+          set +e
+          ./target/release/wasm-capability-audit --nope tests/fixtures/clean-compute.wasm >/dev/null 2>&1
+          status=$?
+          set -e
+          test "$status" -eq 2
+
+      - name: 'CLI: --fail-on high exits 1 on the WASI fixture'
+        run: |
+          set +e
+          ./target/release/wasm-capability-audit --fail-on high \
+            tests/fixtures/wasi-exfil.wasm > /dev/null 2>&1
+          status=$?
+          set -e
+          test "$status" -eq 1
+
+      - name: 'CLI: JSON output is one line and deterministic'
+        run: |
+          a=$(./target/release/wasm-capability-audit --json tests/fixtures/bindgen-browser.wasm)
+          b=$(./target/release/wasm-capability-audit --json tests/fixtures/bindgen-browser.wasm)
+          test "$a" = "$b"
+          test "$(printf '%s' "$a" | wc -l)" -eq 0
+          printf '%s' "$a" | python3 -c 'import json,sys; json.load(sys.stdin)'
+          printf '%s' "$a" | grep -q '"tool":"wasm-capability-audit"'
+
+      - name: 'CLI: --help and --version exit 0'
+        run: |
+          ./target/release/wasm-capability-audit --help | grep -q 'EXIT CODES'
+          ./target/release/wasm-capability-audit --version | grep -q 'wasm-capability-audit'
+          ./target/release/wasm-capability-audit --list-capabilities | grep -q 'filesystem'
+          ./target/release/wasm-capability-audit --list-rules | grep -q 'WASI-FS-001'
+
+  msrv:
+    name: MSRV 1.74 — build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.74.0
+        run: |
+          rustup toolchain install 1.74.0 --profile minimal
+          rustup default 1.74.0
+          rustc --version
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --locked
