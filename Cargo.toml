@@ -1,0 +1,23 @@
+[package]
+name = "wasm-capability-audit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Audits a WebAssembly module's host-surface: what it imports, what the host would grant it, what it exports back, and its memory posture. No dependencies; never executes the module."
+authors = ["David Nichols <244097953+Young-Syre@users.noreply.github.com>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Young-Syre/wasm-capability-audit"
+keywords = ["webassembly", "wasm", "security", "capability", "sandbox"]
+categories = ["command-line-utilities", "development-tools", "wasm"]
+exclude = ["/.github"]
+
+[dependencies]
+
+[[bin]]
+name = "wasm-capability-audit"
+path = "src/main.rs"
+
+[lib]
+name = "wasm_capability_audit"
+path = "src/lib.rs"
