@@ -1,0 +1,14 @@
+# A command-line tool running under WASI that is expected to read and write
+# files, but is not expected to reach the network. The allow-list is the whole
+# point: the filesystem grant is deliberate, the network grant would not be.
+
+allow filesystem
+allow host-io
+allow clock
+allow randomness
+allow environment
+allow process
+allow polling
+
+allow-unknown-imports no
+require-memory-max yes

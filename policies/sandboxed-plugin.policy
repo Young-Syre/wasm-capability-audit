@@ -1,0 +1,22 @@
+# A plugin that is allowed to compute, measure time and draw randomness, and
+# nothing else. The shape of policy a host would apply to untrusted
+# user-supplied modules.
+
+allow clock
+allow randomness
+allow host-io
+
+# Anything this tool could not identify is a review item, not a pass.
+allow-unknown-imports no
+
+# The host keeps the memory handle; the module must not hand it out, and must
+# not hand out a global the host can be made to write.
+allow-exported-memory no
+allow-mutable-global-export no
+
+# Nothing runs before the host asks for it.
+allow-start-function no
+
+# A multi-tenant host needs a ceiling it can plan around.
+require-memory-max yes
+max-memory-pages 256
