@@ -8,7 +8,7 @@
 What a WebAssembly module asks its host for, what the host would be granting,
 and what the module hands back.
 
-## Why this bug class exists
+## WebAssembly has no ambient authority
 
 WebAssembly has no ambient authority. A module cannot open a file, read a
 clock, allocate a socket or call into the page that loaded it unless the host
