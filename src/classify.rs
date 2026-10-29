@@ -204,7 +204,14 @@ const NEAR_REGISTERS: [&str; 4] = [
     "value_return",
 ];
 const NEAR_LOG: [&str; 2] = ["log_utf8", "log_utf16"];
-const NEAR_ABORT: [&str; 3] = ["panic", "panic_utf8", "abort"];
+// "abort" is deliberately absent. NEAR's host API does expose it, but
+// `env.abort` has to reach classify_js so that it reports SHIM-ABORT-001 in
+// any host module rather than being claimed as NEAR-specific -- which is what
+// the_abort_shim_is_classified_in_any_host_module asserts. It used to be in
+// this list with an `&& name != "abort"` guard cancelling it out, so the
+// element was dead and the next reader to notice the redundancy would have
+// removed the guard instead and made SHIM-ABORT-001 unreachable through "env".
+const NEAR_ABORT: [&str; 2] = ["panic", "panic_utf8"];
 
 /// CosmWasm host functions.
 const COSMWASM_DB_WRITE: [&str; 2] = ["db_write", "db_remove"];
@@ -989,7 +996,7 @@ fn classify_near(name: &str, out: &mut Vec<Hit>) {
              public",
         ));
     }
-    if NEAR_ABORT.contains(&name) && name != "abort" {
+    if NEAR_ABORT.contains(&name) {
         out.push(hit(
             "NEAR-ABORT-001",
             Capability::Process,

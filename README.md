@@ -632,11 +632,33 @@ A third property closes the loop on the documentation itself:
   in the code but not in the registry, or in the registry but not in this
   README.
 
-Run it — 205 tests, no network, no fixtures to download:
+Run it — 211 tests, no network, no fixtures to download:
 
 ```sh
 cargo test
 ```
+
+### A name out of the file cannot write the report
+
+A WebAssembly name is arbitrary UTF-8, and the spec permits newlines, escape
+bytes and bidirectional overrides. Every name in a report comes straight out of
+the file under audit, so printed raw a crafted module forges its own output:
+`\x1b[2J\x1b[0;0H` clears the terminal and the module supplies a convincing
+`FINDINGS (0)` in its place, with the real findings pushed into scrollback
+where nobody looks. A bare newline is enough on its own to invent an extra
+evidence line.
+
+Every module-supplied name goes through `report::visible` before it is printed,
+which escapes C0 controls and `DEL`, C1 controls, the bidirectional overrides
+and isolates — the Trojan Source class, which reorders what a reader sees
+without changing a byte of what the classifier matched — and the zero-width
+characters, which hide text rather than move it. Anything else passes through,
+so `journal_écrire_日本` still renders as itself.
+
+The JSON output was never affected: `json::quote` escapes the same range, which
+is what made the text path's omission a gap rather than a decision. Both are
+asserted, including that a bidi override cannot stop `sock_send` being reported
+as network access.
 
 ## What this tool does not do
 
@@ -734,7 +756,7 @@ output.
 | `src/fixtures.rs` | The readable fixture byte-builder |
 | `src/main.rs` | The command-line interface and its exit codes |
 | `policies/` | Two worked policy files |
-| `tests/` | 205 tests; `malformed.rs` is the robustness battery |
+| `tests/` | 211 tests; `malformed.rs` is the robustness battery |
 
 ## Licence
 

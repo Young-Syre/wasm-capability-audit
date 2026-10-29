@@ -20,6 +20,60 @@ fn pages_to_kib(pages: u64) -> u64 {
 }
 
 /// Render the human-readable report.
+/// Make a module-supplied name safe to print to a terminal.
+///
+/// A WebAssembly name is arbitrary UTF-8: the spec permits newlines, escape
+/// bytes and bidirectional overrides, and every name in a report comes
+/// straight out of the file under audit. Printed raw, a crafted module writes
+/// its own report -- `\x1b[2J\x1b[0;0H` clears the screen and the module
+/// supplies a convincing `FINDINGS (0)` in its place, with the real findings
+/// pushed into scrollback where nobody looks. A bare newline is enough on its
+/// own to invent an extra evidence line.
+///
+/// The JSON path never had this problem because `json::quote` escapes the same
+/// range; this is its text equivalent. Escaped here:
+///
+/// * C0 controls and DEL -- newline, carriage return, tab, `ESC`
+/// * C1 controls (`0x80`-`0x9f`), which some terminals still act on
+/// * the bidirectional overrides and isolates, which reorder what a reader
+///   sees without changing a byte of what follows (Trojan Source)
+/// * zero-width and word-joiner characters, which hide text rather than move it
+///
+/// Everything else is passed through, so an ordinary non-ASCII name still
+/// renders as itself. A borrowed string is returned when nothing needed
+/// changing, which is every real module.
+pub fn visible(s: &str) -> std::borrow::Cow<'_, str> {
+    fn needs_escape(c: char) -> bool {
+        let n = c as u32;
+        n < 0x20
+            || n == 0x7f
+            || (0x80..=0x9f).contains(&n)
+            || matches!(n, 0x200b..=0x200f | 0x202a..=0x202e | 0x2060..=0x2064 | 0x2066..=0x2069 | 0xfeff)
+    }
+
+    if !s.chars().any(needs_escape) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    // Deliberately not pre-sized. `s.len()` would be a length taken from the
+    // file under audit, and malformed.rs forbids that in every module but
+    // json.rs on purpose -- the exemption is worth keeping down to one, and
+    // the allocation is a name's worth of bytes.
+    let mut out = String::new();
+    for c in s.chars() {
+        if !needs_escape(c) {
+            out.push(c);
+            continue;
+        }
+        let n = c as u32;
+        if n <= 0xff {
+            let _ = write!(out, "\\x{n:02x}");
+        } else {
+            let _ = write!(out, "\\u{{{n:04x}}}");
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 pub fn render_text(r: &Report) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "{TOOL} {VERSION}");
@@ -64,7 +118,8 @@ pub fn render_text(r: &Report) -> String {
             let _ = writeln!(s, "      {line}");
         }
         for e in &f.evidence {
-            let _ = writeln!(s, "      - {e}");
+            // Evidence is `module.name` taken from the file under audit.
+            let _ = writeln!(s, "      - {}", visible(e));
         }
     }
     let _ = writeln!(s);
@@ -78,7 +133,7 @@ pub fn render_text(r: &Report) -> String {
         let _ = writeln!(
             s,
             "  {:<48} {:<7} {:<28} {}",
-            format!("{}.{}", i.module, i.name),
+            format!("{}.{}", visible(&i.module), visible(&i.name)),
             i.kind,
             if caps.is_empty() {
                 "-".to_string()
@@ -103,7 +158,10 @@ pub fn render_text(r: &Report) -> String {
         let _ = writeln!(
             s,
             "  {:<40} {:<7} index {}{}",
-            e.name, e.kind, e.index, extra
+            visible(&e.name),
+            e.kind,
+            e.index,
+            extra
         );
     }
     let _ = writeln!(s);

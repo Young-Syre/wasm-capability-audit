@@ -9,6 +9,7 @@
 use crate::audit::Report;
 use crate::capability::Capability;
 use crate::json::{string_array, Obj};
+use crate::report::visible;
 use std::fmt::Write as _;
 
 /// The difference between two reports.
@@ -37,7 +38,7 @@ fn import_keys(r: &Report) -> Vec<String> {
     let mut v: Vec<String> = r
         .imports
         .iter()
-        .map(|i| format!("{}.{} ({})", i.module, i.name, i.kind))
+        .map(|i| format!("{}.{} ({})", visible(&i.module), visible(&i.name), i.kind))
         .collect();
     v.sort();
     v.dedup();
@@ -48,7 +49,7 @@ fn export_keys(r: &Report) -> Vec<String> {
     let mut v: Vec<String> = r
         .exports
         .iter()
-        .map(|e| format!("{} ({})", e.name, e.kind))
+        .map(|e| format!("{} ({})", visible(&e.name), e.kind))
         .collect();
     v.sort();
     v.dedup();

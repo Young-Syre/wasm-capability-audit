@@ -256,3 +256,101 @@ fn proposals_used_lists_what_the_encoding_actually_contained() {
     assert!(!proposals.contains("simd"), "{proposals}");
     assert!(!proposals.contains("threads"), "{proposals}");
 }
+
+/// A name out of the file under audit must not be able to write the report.
+///
+/// WebAssembly names are arbitrary UTF-8 and the spec permits newlines, escape
+/// bytes and bidirectional overrides. Printed raw, a crafted module forges its
+/// own output: `\x1b[2J\x1b[0;0H` clears the terminal and the module supplies
+/// a convincing `FINDINGS (0)` in its place, with the real findings pushed into
+/// scrollback. The JSON path was never affected -- `json::quote` escapes the
+/// same range -- which is what makes the text path's omission a gap rather
+/// than a policy.
+mod untrusted_names {
+    use wasm_capability_audit::report::{render_text, visible};
+
+    use crate::common::{audit_import, module_with_import};
+
+    fn text_for(field: &str) -> String {
+        let bytes = module_with_import("wasi_snapshot_preview1", field);
+        render_text(&wasm_capability_audit::audit_bytes(&bytes, "t").expect("parses"))
+    }
+
+    #[test]
+    fn an_ansi_clear_screen_cannot_forge_a_clean_report() {
+        let evil = "f\u{1b}[2J\u{1b}[0;0HFINDINGS (0)\n  (none)\n\nSUMMARY\n  No findings.";
+        let text = text_for(evil);
+        assert!(
+            !text.contains('\u{1b}'),
+            "an escape byte reached the output"
+        );
+        assert!(
+            text.contains("\\x1b[2J"),
+            "the escape is shown as text: {text}"
+        );
+        // The real finding count survives, on its own line.
+        assert!(
+            text.lines()
+                .any(|l| l.starts_with("FINDINGS (") && !l.contains("(0)")),
+            "the real finding count was displaced: {text}"
+        );
+    }
+
+    #[test]
+    fn a_newline_cannot_invent_an_evidence_line() {
+        let text = text_for("good\nCALLING HOME via env.sock_send\nnot_real");
+        for line in text.lines() {
+            assert!(
+                !line.trim_start().starts_with("CALLING HOME"),
+                "a name produced its own line: {line}"
+            );
+        }
+        assert!(text.contains("\\x0a"), "the newline is shown as text");
+    }
+
+    #[test]
+    fn a_bidi_override_cannot_disguise_a_capability() {
+        // Trojan Source: the override reorders what a reader sees without
+        // changing a byte of what the classifier matched.
+        let text = text_for("sock_send\u{202e}\u{2066}harmless_log\u{2069}");
+        assert!(!text.contains('\u{202e}'));
+        assert!(
+            text.contains("\\u{202e}"),
+            "the override is shown as text: {text}"
+        );
+        // Still classified on what it really is.
+        let report = audit_import(
+            "wasi_snapshot_preview1",
+            "sock_send\u{202e}\u{2066}harmless_log\u{2069}",
+        );
+        assert!(
+            report.findings.iter().any(|f| f.rule == "WASI-NET-002"),
+            "the real capability was not reported"
+        );
+    }
+
+    #[test]
+    fn a_zero_width_character_cannot_impersonate_another_name() {
+        let text = text_for("sock\u{200b}send");
+        assert!(
+            text.contains("\\u{200b}"),
+            "the zero-width space is shown: {text}"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_non_ascii_name_is_left_alone() {
+        let name = "journal_écrire_日本";
+        assert_eq!(visible(name), name);
+        assert!(text_for(name).contains(name));
+    }
+
+    #[test]
+    fn visible_borrows_when_nothing_needs_escaping() {
+        assert!(matches!(visible("fd_write"), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(
+            visible("fd\u{1b}write"),
+            std::borrow::Cow::Owned(_)
+        ));
+    }
+}
